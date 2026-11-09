@@ -3,7 +3,7 @@
 ## Unreleased
 
 - New Linux targets for 32-bit ARM (`linux-armv7l`, e.g. Raspberry Pi OS), `ppc64le`, `s390x` and `riscv64`, each with a `musl-*` twin for Alpine, and their Docker names (`linux/arm/v7` and so on) in `-t` and `--dockerfile`. Plain `linux_armv7l` wheels, which PyPI allows for the Raspberry Pi, count on `linux-armv7l` as they do for pip, but not on `musl-armv7l`: they're glibc builds. `-t all` still means the eight common platforms; `-t everything` adds these. (#8)
-- Read old-format `pdm.lock` files (lock_version < 4) for package files from the `[metadata.files]` table instead of always looking them up on PyPI. (#67, thanks [@nxxis](https://github.com/nxxis))
+- Read package files from the `[metadata.files]` table in older `pdm.lock` files (PDM before 2.8) instead of looking them up on PyPI. (#67, thanks [@nxxis](https://github.com/nxxis))
 
 ## 0.5.0 (2026-11-09)
 

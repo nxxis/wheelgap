@@ -308,7 +308,7 @@ def parse_pdm_lock(path: Path) -> Source:
         else:
             entries = p.get("files")
             if entries is None:
-                # Older lockfiles (lock_version < 4) keep files in one [metadata.files] table
+                # Older lockfiles (PDM before 2.8) keep files in one [metadata.files] table
                 # keyed by "name version", with the name as PDM wrote it, which isn't always
                 # normalized ("Jinja2 3.1.2" for jinja2): try the exact key, then match names.
                 entries = legacy_files.get(f"{p['name']} {p.get('version')}")
