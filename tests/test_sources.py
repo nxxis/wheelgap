@@ -57,6 +57,30 @@ def test_pdm_lock(fixtures, input_name):
     assert all(p.origin == "pdm.lock" for p in src.packages)
 
 
+def test_pdm_lock_legacy_metadata_files(tmp_path, fake_pypi):
+    path = tmp_path / "pdm.lock"
+    lock = (
+        'version = "3.0"\n\n'
+        '[[package]]\nname = "oldpkg"\nversion = "1.0"\n\n'
+        '[[package]]\nname = "newpkg"\nversion = "2.0"\n\n'
+        '[[package]]\nname = "jinja2"\nversion = "3.1.2"\n\n'
+        '[metadata.files]\n'
+        '"oldpkg 1.0" = [\n'
+        '    {url = "https://files.pythonhosted.org/packages/oldpkg-1.0-py3-none-any.whl", hash = "sha256:00"},\n'
+        ']\n'
+        '"Jinja2 3.1.2" = [\n'
+        '    {url = "https://files.pythonhosted.org/packages/Jinja2-3.1.2-py3-none-any.whl", hash = "sha256:00"},\n'
+        ']\n'
+    )
+    path.write_text(lock, encoding="utf-8")
+    (src,) = load_inputs([str(path)])
+    pkgs = by_name(src)
+    assert pkgs["oldpkg"].files == ["oldpkg-1.0-py3-none-any.whl"]
+    assert pkgs["newpkg"].files is None  # not in metadata.files either: fall back to PyPI
+    assert pkgs["jinja2"].files == ["Jinja2-3.1.2-py3-none-any.whl"]  # normalized-name fallback
+    assert fake_pypi == []  # parsing alone never hits the network
+
+
 def test_pylock(fixtures):
     (src,) = load_inputs([str(fixtures / "pylockproj")])
     pkgs = by_name(src)

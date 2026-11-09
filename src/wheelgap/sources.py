@@ -148,6 +148,7 @@ def parse_poetry_lock(path: Path) -> Source:
 
 def parse_pdm_lock(path: Path) -> Source:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
+    legacy_files = data.get("metadata", {}).get("files", {})
     pkgs = []
     for p in data.get("package", []):
         pkg = Package(p["name"], p.get("version"), origin=path.name)
@@ -156,9 +157,28 @@ def parse_pdm_lock(path: Path) -> Source:
         src_type = next((k for k in ("git", "hg", "svn", "bzr", "path", "url", "file") if k in p), None)
         if src_type:
             pkg.skip = src_type
-        elif "files" in p:
-            pkg.files = [f for f in (_filename(e) for e in p["files"]) if f]
-        # No files list at all: leave files as None so the PyPI lookup fills them in.
+        else:
+            entries = p.get("files")
+            if entries is None:
+                # Older lockfiles (lock_version < 4) keep files in one table keyed by
+                # "name version" instead of a per-package `files` list. The name there
+                # is whatever PDM originally wrote, which isn't always the normalized
+                # form (e.g. "Jinja2 3.1.2" vs "jinja2") -- try the exact key first,
+                # then fall back to a normalized-name match (per patrickballard's
+                # review comment on the issue).
+                exact_key = f"{p['name']} {p.get('version')}"
+                entries = legacy_files.get(exact_key)
+                if entries is None:
+                    target_name = canonicalize_name(p["name"])
+                    target_version = p.get("version")
+                    for key, value in legacy_files.items():
+                        key_name, _, key_version = key.rpartition(" ")
+                        if key_version == target_version and canonicalize_name(key_name) == target_name:
+                            entries = value
+                            break
+            if entries is not None:
+                pkg.files = [f for f in (_filename(e) for e in entries) if f]
+            # Not in either place: leave files as None so the PyPI lookup fills them in.
         pkgs.append(pkg)
     return Source(path.name, pkgs)
 
