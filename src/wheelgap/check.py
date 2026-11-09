@@ -24,7 +24,20 @@ class Status(StrEnum):
     BUNDLED = "bundled"  # no wheel on the index, but Pyodide ships its own build (--pyodide-lock)
 
 
-SDIST_SUFFIXES = (".tar.gz", ".zip", ".tar.bz2", ".tgz", ".tar.xz")
+# The archive formats pip accepts as source distributions.
+SDIST_SUFFIXES = (
+    ".tar.gz",
+    ".zip",
+    ".tar.bz2",
+    ".tgz",
+    ".tar.xz",
+    ".tar",
+    ".tbz",
+    ".txz",
+    ".tlz",
+    ".tar.lz",
+    ".tar.lzma",
+)
 
 
 @dataclass
@@ -64,9 +77,25 @@ def has_sdist(files: list[str]) -> bool:
     return any(f.endswith(SDIST_SUFFIXES) for f in files)
 
 
-def status_for(files: list[str] | None, target: Target, _wheels: list[frozenset[Tag]] | None = None) -> Status:
+def _installable(files: list[str], target: Target) -> bool:
+    return any(target.accepts(t) for t in wheel_tags(files)) or (has_sdist(files) and target.builds_sdists)
+
+
+def status_for(
+    files: list[str] | None,
+    target: Target,
+    _wheels: list[frozenset[Tag]] | None = None,
+    yanked: frozenset[str] = frozenset(),
+) -> Status:
     if files is None:
         return Status.UNKNOWN
+    if yanked:
+        # `yanked` is only non-empty for a release pinned with ==. Like pip, ignore its yanked files
+        # unless every file this target could use is yanked; then pip installs them anyway (PEP 592).
+        live = [f for f in files if f not in yanked]
+        if _installable(live, target):
+            files = live
+        _wheels = None
     wheels = _wheels if _wheels is not None else wheel_tags(files)
     if any(target.accepts(t) for t in wheels):
         return Status.WHEEL
@@ -74,6 +103,7 @@ def status_for(files: list[str] | None, target: Target, _wheels: list[frozenset[
 
 
 _PLAT_RE = re.compile(r"^(manylinux|musllinux|macosx)_(\d+)_(\d+)_(.+)$")
+_LEGACY_GLIBC = {"manylinux1": (2, 5), "manylinux2010": (2, 12), "manylinux2014": (2, 17)}
 _LIBC = {"manylinux": "glibc", "musllinux": "musl", "macosx": "macOS"}
 
 
@@ -88,7 +118,8 @@ def _platform_reason(plat: str, target: Target) -> str:
     if m:
         kind, major, minor, wheel_arch = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
     elif plat.startswith("manylinux") and "_" in plat:  # manylinux2014_aarch64 and friends
-        kind, major, minor, wheel_arch = "manylinux", 0, 0, plat.split("_", 1)[1]
+        legacy, wheel_arch = plat.split("_", 1)
+        kind, (major, minor) = "manylinux", _LEGACY_GLIBC.get(legacy, (0, 0))
     else:
         return f"{plat} doesn't match {target.platform}"
     same_arch = wheel_arch == arch or (kind == "macosx" and wheel_arch == "universal2")
@@ -115,8 +146,13 @@ def rejection(filename: str, target: Target) -> str | None:
         return None
     platforms = sorted({t.platform for t in wheel})
     if "any" in platforms or set(platforms) & set(target.platform_tags()):
-        if target.freethreaded and any(t.abi == "abi3" for t in wheel):
-            return "abi3 wheels can't be used on free-threaded Python"
+        if target.freethreaded:
+            stable = [t for t in wheel if t.abi == "abi3t"]
+            if stable:  # PEP 803: the free-threaded stable ABI, cpXY-abi3t works on CPython X.Y+ only
+                least = min(int(t.interpreter[3:]) for t in stable if t.interpreter[3:].isdigit())
+                return f"abi3t wheels need CPython 3.{least}+ (free-threaded)"
+            if any(t.abi == "abi3" for t in wheel):
+                return "abi3 wheels can't be used on free-threaded Python (only abi3t ones can)"
         built = ", ".join(sorted({f"{t.interpreter}-{t.abi}" for t in wheel}))
         return f"built for {built}, not CPython {target.python}"
     # Name the tag closest to the target: same arch first, and the modern manylinux_2_17_* form
@@ -166,8 +202,14 @@ def explain(files: list[str], target: Target) -> list[tuple[str, str]]:
 _marker_cache: dict[str, Marker | None] = {}
 
 
+# Marker names wheelgap can't know for a target: extras and groups (uv writes its `conflicts` as
+# extra == '...' terms), and the OS release/version of the machine that will install. A marker that
+# uses one counts as holding, so a package is never hidden because of something we can't evaluate.
+_UNKNOWABLE_MARKER = re.compile(r"\b(extra|extras|dependency_groups|platform_release|platform_version)\b")
+
+
 def marker_holds(marker: str | None, target: Target) -> bool:
-    if not marker:
+    if not marker or _UNKNOWABLE_MARKER.search(marker):
         return True
     if marker not in _marker_cache:
         try:
@@ -264,7 +306,7 @@ def check(sources: list[Source], targets: list[Target]) -> list[Row]:
             row = Row(pkg)
             for t in targets:
                 needed = i in installed[t] if installed is not None else applies(pkg, t)
-                row.results[t] = status_for(files, t, wheels) if needed else Status.NOT_NEEDED
+                row.results[t] = status_for(files, t, wheels, pkg.yanked) if needed else Status.NOT_NEEDED
                 if needed and installed is not None:
                     row.via[t] = dependency_path(source, installed[t], i)
             rows.append(row)

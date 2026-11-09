@@ -2,7 +2,9 @@ import json
 
 import pytest
 
+from wheelgap.check import Status, check
 from wheelgap.sources import SourceError, find_lockfile, load_inputs, parse_requirements
+from wheelgap.targets import build_targets
 
 
 def by_name(source):
@@ -193,3 +195,77 @@ def test_requirements_bare_vcs_urls_are_skipped(tmp_path):
     assert got["https://example.com/pkgs/baz-1.0.tar.gz"] == ("url", None)
     assert got["named"] == ("url", None)
     assert got["requests"] == (None, "2.32.3")
+
+
+def test_uv_path_dependency_is_not_a_root(tmp_path):
+    # winhelper is a path dependency only installed on Windows; its own dependency must follow suit.
+    (tmp_path / "uv.lock").write_text(
+        'version = 1\n\n[[package]]\nname = "app"\nversion = "0"\nsource = { editable = "." }\n'
+        'dependencies = [{ name = "winhelper", marker = "sys_platform == \'win32\'" }]\n\n'
+        '[[package]]\nname = "winhelper"\nversion = "1"\nsource = { directory = "libs/winhelper" }\n'
+        'dependencies = [{ name = "pywin32" }]\n\n'
+        '[[package]]\nname = "pywin32"\nversion = "311"\nsource = { registry = "https://pypi.org/simple" }\n'
+        'wheels = [{ url = "https://files.pythonhosted.org/p/pywin32-311-cp313-cp313-win_amd64.whl" }]\n',
+        encoding="utf-8",
+    )
+    (src,) = load_inputs([str(tmp_path)])
+    lin, win = build_targets(["3.13"], ["linux-x86_64", "win-amd64"])
+    rows = {r.package.name: r for r in check([src], [lin, win])}
+    assert rows["pywin32"].results == {lin: Status.NOT_NEEDED, win: Status.WHEEL}
+
+
+def test_poetry_dict_markers_with_an_unconditional_group(tmp_path):
+    (tmp_path / "poetry.lock").write_text(
+        '[[package]]\nname = "colorama"\nversion = "0.4.6"\ngroups = ["main", "dev"]\n'
+        'markers = { main = "sys_platform == \\"win32\\"" }\nfiles = []\n\n[metadata]\nlock-version = "2.1"\n',
+        encoding="utf-8",
+    )
+    (src,) = load_inputs([str(tmp_path)])
+    assert src.packages[0].markers is None  # dev always installs it, so it's needed everywhere
+
+
+def test_poetry_1x_lock_walks_dependency_markers(tmp_path):
+    # Before lock-version 2.1, markers only sit on dependency edges.
+    (tmp_path / "poetry.lock").write_text(
+        '[[package]]\nname = "app-lib"\nversion = "1.0"\n\n[package.dependencies]\n'
+        'pywin32 = {version = ">=300", markers = "sys_platform == \\"win32\\""}\nrequests = "*"\n\n'
+        '[[package]]\nname = "pywin32"\nversion = "306"\nfiles = []\n\n'
+        '[[package]]\nname = "requests"\nversion = "2.32.3"\nfiles = []\n\n'
+        '[metadata]\nlock-version = "1.1"\n',
+        encoding="utf-8",
+    )
+    (src,) = load_inputs([str(tmp_path)])
+    lin, win = build_targets(["3.13"], ["linux-x86_64", "win-amd64"])
+    rows = {r.package.name: r for r in check([src], [lin, win])}
+    assert rows["pywin32"].results[lin] is Status.NOT_NEEDED  # used to be a false "missing" on Linux
+    assert rows["pywin32"].results[win] is not Status.NOT_NEEDED
+    assert rows["requests"].results[lin] is not Status.NOT_NEEDED
+
+
+def test_poetry_package_without_files_is_looked_up(tmp_path):
+    (tmp_path / "poetry.lock").write_text(
+        '[[package]]\nname = "x"\nversion = "1"\n\n[metadata]\nlock-version = "2.1"\n'
+    )
+    (src,) = load_inputs([str(tmp_path)])
+    assert src.packages[0].files is None  # not [] (which would mean "can't install")
+
+
+def test_requirements_parsing_edge_cases(tmp_path):
+    (tmp_path / "more.txt").write_text("purewheel==3.1\n", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text(
+        "-rmore.txt\n"  # no space: used to be silently dropped
+        "fastlib==2.0.0 \\\n    --hash sha256:00\n"  # --hash with a space used to abort the run
+        "nowheels==0.9\t# a comment after a tab used to abort the run\n"
+        "requests==2.32.3\t# see https://docs.python-requests.org\n"  # used to be skipped as a URL
+        "named@https://example.com/named-1.0.tar.gz\n"
+        "git+https://example.com/repo.git#subdirectory=src&egg=deep ; python_version >= '3.10'\n",
+        encoding="utf-8",
+    )
+    (src,) = load_inputs([str(tmp_path / "requirements.txt")])
+    got = {p.name: (p.version, p.skip) for p in src.packages}
+    assert got["purewheel"] == ("3.1", None)
+    assert got["fastlib"] == ("2.0.0", None)
+    assert got["nowheels"] == ("0.9", None)
+    assert got["requests"] == ("2.32.3", None)
+    assert got["named"] == (None, "url")
+    assert got["deep"] == (None, "url")

@@ -156,7 +156,7 @@ def test_requirements_against_fake_index(fixtures, fake_pypi):
 def test_lookup_errors_are_unknown(fake_pypi):
     pkgs = [Package("doesnotexist", "1.0"), Package("fastlib", "9.9")]
     fill_all(pkgs)
-    assert [p.error for p in pkgs] == ["not on index", "not on index"]
+    assert [p.error for p in pkgs] == ["not on index", "version 9.9 not on index"]
     (t,) = build_targets(["3.13"], ["linux-x86_64"])
     rows = check([Source("x", pkgs)], [t])
     assert [r.results[t] for r in rows] == [Status.UNKNOWN, Status.UNKNOWN]
@@ -194,3 +194,27 @@ def test_via_prefers_a_plain_requirement_over_a_group():
     )
     (t,) = build_targets(["3.13"], ["linux-x86_64"])
     assert via(src, [t], "c") == {t: ["b", "c"]}
+
+
+def test_markers_wheelgap_cannot_know_count_as_needed():
+    (t,) = build_targets(["3.13"], ["linux-x86_64"])
+    # uv writes [tool.uv] conflicts as extra == '...' terms; installers know the OS release, we don't.
+    for marker in ("extra == 'extra-7-proj-cu124'", "platform_release >= '20.0'", "'docs' in dependency_groups"):
+        assert marker_holds(marker, t), marker
+    assert not marker_holds("sys_platform == 'win32'", t)
+
+
+def test_more_sdist_formats():
+    (t,) = build_targets(["3.13"], ["linux-x86_64"])
+    assert status_for(["foo-1.0.tar"], t) is Status.SOURCE
+    assert status_for(["foo-1.0.tar.lz"], t) is Status.SOURCE
+
+
+def test_yanked_files_count_only_when_every_usable_file_is_yanked():
+    lin, win = build_targets(["3.13"], ["linux-x86_64", "win-amd64"])
+    files = ["foo-2.0-cp313-cp313-manylinux_2_17_x86_64.whl", "foo-2.0-cp313-cp313-win_amd64.whl"]
+    yanked = frozenset({files[0]})
+    # Only the Linux wheel is yanked: pip on Linux has nothing else, so it installs the yanked wheel.
+    assert status_for(files, lin, yanked=yanked) is Status.WHEEL
+    assert status_for(files + ["foo-2.0.tar.gz"], lin, yanked=yanked) is Status.SOURCE  # a live sdist wins
+    assert status_for(files, win, yanked=yanked) is Status.WHEEL

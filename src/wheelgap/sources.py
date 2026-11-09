@@ -31,6 +31,10 @@ class Package:
     origin: str = ""
     # Environment markers; the package is installed if any of them is true. None means always.
     markers: list[str] | None = None
+    # A version range that isn't an exact pin (numpy>=1.26,<2): the index picks the newest match.
+    spec: str | None = None
+    # Files of a pinned release that the index marks as yanked (see check.status_for).
+    yanked: frozenset[str] = frozenset()
 
     @property
     def key(self) -> str:
@@ -94,7 +98,9 @@ def parse_uv_lock(path: Path) -> Source:
         i = len(source.packages)
         source.packages.append(pkg)
         edges[i] = _uv_edges(p)
-        if kind in ("editable", "virtual", "directory") or pkg.key in members:
+        # Roots are the project itself (source "."), plus workspace members. A path dependency elsewhere
+        # (directory = "libs/x") is reached through its dependents' edges and their markers instead.
+        if (kind in ("editable", "virtual") and src.get(kind) == ".") or pkg.key in members:
             source.roots.append(i)
     for name, group in manifest.get("dependency-groups", {}).items():
         for d in group:
@@ -124,27 +130,57 @@ def parse_pylock(path: Path) -> Source:
     return Source(path.name, pkgs)
 
 
+def _poetry_edges(p: dict) -> list[Edge]:
+    """A poetry.lock package's dependencies as edges. A value is a version string, a table, or a list of
+    tables for different markers (numpy = [{version = ">=2", markers = "python_version >= '3.10'"}, ...])."""
+    out: list[Edge] = []
+    for name, spec in p.get("dependencies", {}).items():
+        for s in spec if isinstance(spec, list) else [spec]:
+            out.append((name, None, s.get("markers") if isinstance(s, dict) else None))
+    return out
+
+
 def parse_poetry_lock(path: Path) -> Source:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    legacy_files = data.get("metadata", {}).get("files", {})
-    pkgs = []
+    metadata = data.get("metadata", {})
+    legacy_files = metadata.get("files", {})
+    pkgs: list[Package] = []
+    edges: dict[int, list[Edge]] = {}
     for p in data.get("package", []):
         pkg = Package(p["name"], p.get("version"), origin=path.name)
         markers = p.get("markers")
         if isinstance(markers, str):
             pkg.markers = [markers]
         elif isinstance(markers, dict):
-            pkg.markers = [m for m in markers.values() if isinstance(m, str)] or None
+            # Poetry leaves a group out of the dict when the package is always installed for it.
+            always = any(g not in markers for g in p.get("groups", []))
+            pkg.markers = None if always else ([m for m in markers.values() if isinstance(m, str)] or None)
         src_type = p.get("source", {}).get("type")
         if src_type in ("git", "directory", "file", "url"):
             pkg.skip = src_type
         else:
             entries = p.get("files")
             if entries is None:
-                entries = legacy_files.get(p["name"], [])
-            pkg.files = [f for f in (_filename(e) for e in entries) if f]
+                entries = legacy_files.get(p["name"])
+            # No files recorded at all (old [metadata.hashes] locks): leave them for the index lookup.
+            pkg.files = None if entries is None else [f for f in (_filename(e) for e in entries) if f]
+        edges[len(pkgs)] = _poetry_edges(p)
         pkgs.append(pkg)
+    # Lock files before 2.1 (all of Poetry 1.x) only record markers on dependency edges, not on
+    # packages, so walk the graph from the packages nothing depends on, as for uv.lock.
+    if _version_tuple(str(metadata.get("lock-version", "2.1"))) < (2, 1) and pkgs:
+        depended = {canonicalize_name(name) for es in edges.values() for name, _, _ in es}
+        roots = [i for i, p in enumerate(pkgs) if p.key not in depended]
+        if roots:
+            return Source(path.name, pkgs, edges=edges, roots=roots)
     return Source(path.name, pkgs)
+
+
+def _version_tuple(text: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in text.split("."))
+    except ValueError:
+        return (0,)
 
 
 def _add_once(pkgs: list[Package], seen: dict[tuple[str, str | None], Package], pkg: Package) -> None:
@@ -212,10 +248,17 @@ def requirement_to_package(text: str, origin: str) -> Package:
     markers = [str(req.marker)] if req.marker else None
     if req.url:
         return Package(req.name, None, skip="url", origin=origin, markers=markers)
-    return Package(req.name, _pinned_version(req), origin=origin, markers=markers)
+    version = _pinned_version(req)
+    spec = str(req.specifier) if req.specifier and version is None else None
+    return Package(req.name, version, origin=origin, markers=markers, spec=spec)
 
 
-_NAMED_URL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\s*(\[[^\]]*\])?\s*@\s")
+# "name @ url", "name@url" and "name[extra] @ url": PEP 508 direct references, which Requirement parses.
+# A bare URL can't match: its scheme ("git+ssh:") has characters a package name can't.
+_NAMED_URL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\s*(\[[^\]]*\])?\s*@")
+_EGG_RE = re.compile(r"[#&]egg=([A-Za-z0-9][A-Za-z0-9._-]*)")
+_COMMENT_RE = re.compile(r"\s#")
+_INCLUDE_RE = re.compile(r"^(?:-r|--requirement)(?:\s+|=)?(\S.*)$")
 
 
 def parse_requirements(path: Path, _seen: set[Path] | None = None) -> Source:
@@ -227,12 +270,11 @@ def parse_requirements(path: Path, _seen: set[Path] | None = None) -> Source:
     pkgs: list[Package] = []
     lines = path.read_text(encoding="utf-8").replace("\\\n", " ").splitlines()
     for raw in lines:
-        line = raw.split(" #", 1)[0].strip()
+        line = _COMMENT_RE.split(raw, 1)[0].strip()  # " # note" or "<TAB># note"
         if not line or line.startswith("#"):
             continue
-        if line.startswith(("-r ", "--requirement")):
-            ref = line.split(None, 1)[1].strip() if " " in line else line.split("=", 1)[1]
-            pkgs.extend(parse_requirements(path.parent / ref, seen).packages)
+        if m := _INCLUDE_RE.match(line):  # -r file, -rfile, --requirement file, --requirement=file
+            pkgs.extend(parse_requirements(path.parent / m.group(1).strip(), seen).packages)
             continue
         if line.startswith("-e ") or line.startswith("--editable"):
             name = line.split("#egg=", 1)[1] if "#egg=" in line else line.split(None, 1)[-1]
@@ -240,14 +282,19 @@ def parse_requirements(path: Path, _seen: set[Path] | None = None) -> Source:
             continue
         if line.startswith("-"):
             continue  # pip options: --index-url, -c, --hash continuation, ...
-        line = " ".join(t for t in line.split() if not t.startswith("--hash"))
+        tokens = line.split()
+        # Drop --hash=sha256:... and "--hash sha256:..." (option and value as two tokens).
+        line = " ".join(
+            t for k, t in enumerate(tokens) if not t.startswith("--hash") and (k == 0 or tokens[k - 1] != "--hash")
+        )
         if line.startswith((".", "/")):
             pkgs.append(Package(line, None, skip="path", origin=path.name))
             continue
         if "://" in line and not _NAMED_URL_RE.match(line):
             # A bare URL (git+ssh://git@github.com/org/repo.git#egg=foo): never from the index.
             # "name @ url" lines are left to Requirement, which knows the name and markers.
-            name = line.split("#egg=", 1)[1].split("&")[0] if "#egg=" in line else line
+            egg = _EGG_RE.search(line)
+            name = egg.group(1) if egg else line.split(";", 1)[0].strip()
             pkgs.append(Package(name, None, skip="url", origin=path.name))
             continue
         pkgs.append(requirement_to_package(line, path.name))
