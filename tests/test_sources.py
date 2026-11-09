@@ -62,7 +62,7 @@ def test_pdm_lock(fixtures, input_name):
 def test_pdm_lock_legacy_metadata_files(tmp_path, fake_pypi):
     path = tmp_path / "pdm.lock"
     lock = (
-        'version = "3.0"\n\n'
+        '[metadata]\nlock_version = "3.0"\n\n'
         '[[package]]\nname = "oldpkg"\nversion = "1.0"\n\n'
         '[[package]]\nname = "newpkg"\nversion = "2.0"\n\n'
         '[[package]]\nname = "jinja2"\nversion = "3.1.2"\n\n'
@@ -80,7 +80,11 @@ def test_pdm_lock_legacy_metadata_files(tmp_path, fake_pypi):
     assert pkgs["oldpkg"].files == ["oldpkg-1.0-py3-none-any.whl"]
     assert pkgs["newpkg"].files is None  # not in metadata.files either: fall back to PyPI
     assert pkgs["jinja2"].files == ["Jinja2-3.1.2-py3-none-any.whl"]  # normalized-name fallback
-    assert fake_pypi == []  # parsing alone never hits the network
+    from wheelgap.pypi import fill_all
+
+    fill_all(src.packages)
+    # Only the package missing from [metadata.files] is looked up on the index.
+    assert fake_pypi and all("/newpkg/" in url for url in fake_pypi)
 
 
 def test_pylock(fixtures):
