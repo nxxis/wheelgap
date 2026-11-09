@@ -24,6 +24,9 @@ from wheelgap.dockerfile import DockerfileError, ImageTarget, last_from, parse_f
         ("ghcr.io/astral-sh/uv:python3.14-trixie-slim", ImageTarget("3.14", "linux-x86_64", glibc="2.41")),
         ("ghcr.io/astral-sh/uv:0.13.7-python3.13-trixie-slim", ImageTarget("3.13", "linux-x86_64", glibc="2.41")),
         ("ghcr.io/astral-sh/uv:0.13-python3.13-trixie-slim", ImageTarget("3.13", "linux-x86_64", glibc="2.41")),
+        ("--platform=linux/arm/v7 python:3.13-alpine", ImageTarget("3.13", "musl-armv7l", musl="1.2")),
+        ("--platform=linux/ppc64le python:3.13-bookworm", ImageTarget("3.13", "linux-ppc64le", glibc="2.36")),
+        ("--platform=linux/riscv64 python:3.14-trixie", ImageTarget("3.14", "linux-riscv64", glibc="2.41")),
         (
             "--platform=linux/arm64 ghcr.io/astral-sh/uv:python3.12-alpine3.23",
             ImageTarget("3.12", "musl-aarch64", musl="1.2"),
@@ -45,7 +48,8 @@ def test_parse_from(line, expected):
         ("ghcr.io/astral-sh/uv:0.13.7-alpine", r"must specify a Python version like python3\.13-alpine"),
         ("python:${PY}-slim", "build arguments"),
         ("--platform=$BUILDPLATFORM python:3.13", "build arguments"),
-        ("--platform=linux/s390x python:3.13", "only linux/amd64"),
+        ("--platform=linux/386 python:3.13", "only linux/amd64"),
+        ("--platform=linux/s390x ghcr.io/astral-sh/uv:python3.13-bookworm-slim", "only published for linux/amd64"),
         ("python:3.13-slim-buster", "unknown image variant 'buster'"),
     ],
 )

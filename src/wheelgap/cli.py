@@ -23,6 +23,7 @@ from .targets import (
     DEFAULT_MACOS,
     DEFAULT_MUSL,
     DEFAULT_PLATFORMS,
+    EXTRA_ARCHES,
     PLATFORMS,
     PYODIDE_PLATFORMS,
     Target,
@@ -88,7 +89,10 @@ def make_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="PLATFORM",
-        help=f"target platform (repeatable, or 'all'; default: {','.join(DEFAULT_PLATFORMS)})",
+        help=(
+            "target platform (repeatable; 'all' for the 8 common ones, 'everything' adds armv7l, ppc64le, "
+            f"s390x and riscv64 Linux; default: {','.join(DEFAULT_PLATFORMS)})"
+        ),
     )
     p.add_argument("--glibc", metavar="X.Y", help=f"glibc version for linux-* targets (default: {DEFAULT_GLIBC})")
     p.add_argument("--musl", metavar="X.Y", help=f"musl version for musl-* targets (default: {DEFAULT_MUSL})")
@@ -369,7 +373,8 @@ def print_target_list(args: argparse.Namespace, config: dict) -> None:
     limits["pyodide"] = f", Python {pythons} (not in -t all)"
 
     rows = [
-        (name, aliases[name], f"{family} {arch}{limits.get(family, '')}") for name, (family, arch) in PLATFORMS.items()
+        (name, aliases[name], f"{family} {arch}{limits.get(family, '')}{' (not in -t all)' * (arch in EXTRA_ARCHES)}")
+        for name, (family, arch) in PLATFORMS.items()
     ]
     if args.json:
         print(

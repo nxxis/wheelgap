@@ -249,6 +249,8 @@ def test_list_targets_json_includes_every_platform_and_alias(capsys):
     assert "glibc <= 2.36" in by_name["linux-x86_64"]["accepts"]
     assert "macOS <= 14.0" in by_name["macos-arm64"]["accepts"]
     assert by_name["pyodide"]["accepts"] == "pyodide wasm32, Python 3.11, 3.12, 3.13, 3.14 (not in -t all)"
+    assert by_name["linux-s390x"]["accepts"] == "manylinux s390x, glibc <= 2.36 (not in -t all)"
+    assert by_name["linux-aarch64"]["accepts"] == "manylinux aarch64, glibc <= 2.36"
 
 
 def test_list_targets_respects_compatibility_overrides(capsys):

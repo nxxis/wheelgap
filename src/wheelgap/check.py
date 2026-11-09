@@ -128,6 +128,8 @@ def _platform_reason(plat: str, target: Target) -> str:
     elif plat.startswith("manylinux") and "_" in plat:  # manylinux2014_aarch64 and friends
         legacy, wheel_arch = plat.split("_", 1)
         kind, (major, minor) = "manylinux", _LEGACY_GLIBC.get(legacy, (0, 0))
+    elif plat == f"linux_{arch}" and family == "musllinux":
+        return f"{plat} is a plain Linux (glibc) build; wheelgap only counts musllinux wheels for musl"
     else:
         return f"{plat} doesn't match {target.platform}"
     same_arch = wheel_arch == arch or (kind == "macosx" and wheel_arch == "universal2")
@@ -187,12 +189,12 @@ def _closeness(filename: str, target: Target) -> tuple[int, int, str]:
     except InvalidWheelFilename:
         return (3, 99, filename)
     platforms = {t.platform for t in wheel}
-    arch = PLATFORMS[target.platform][1]
+    family, arch = PLATFORMS[target.platform]
     if "any" in platforms or platforms & set(target.platform_tags()):
         group = 0
-    elif any(p.endswith((arch, "universal2")) for p in platforms):
+    elif any(p.endswith(arch) or (p.endswith("universal2") and family == "macos") for p in platforms):
         group = 1
-    elif any(p.startswith(_OS_PREFIX[PLATFORMS[target.platform][0]]) for p in platforms):
+    elif any(p.startswith(_OS_PREFIX[family]) for p in platforms):
         group = 2
     else:
         group = 3

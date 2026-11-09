@@ -20,10 +20,25 @@ PLATFORMS: dict[str, tuple[str, str]] = {
     "win-amd64": ("windows", "win_amd64"),
     "win-arm64": ("windows", "win_arm64"),
     "pyodide": ("pyodide", "wasm32"),
+    "linux-armv7l": ("manylinux", "armv7l"),
+    "linux-ppc64le": ("manylinux", "ppc64le"),
+    "linux-s390x": ("manylinux", "s390x"),
+    "linux-riscv64": ("manylinux", "riscv64"),
+    "musl-armv7l": ("musllinux", "armv7l"),
+    "musl-ppc64le": ("musllinux", "ppc64le"),
+    "musl-s390x": ("musllinux", "s390x"),
+    "musl-riscv64": ("musllinux", "riscv64"),
 }
 
-# `-t all` means the native platforms; Pyodide only when asked for by name.
-NATIVE_PLATFORMS = [name for name, (family, _) in PLATFORMS.items() if family != "pyodide"]
+# Less common Linux architectures: checked by name, or with `-t everything`.
+EXTRA_ARCHES = {"armv7l", "ppc64le", "s390x", "riscv64"}
+
+# `-t all` means the eight common native platforms; `-t everything` adds the extra Linux
+# architectures. Pyodide is only checked when asked for by name.
+NATIVE_PLATFORMS = [
+    name for name, (family, arch) in PLATFORMS.items() if family != "pyodide" and arch not in EXTRA_ARCHES
+]
+EVERY_NATIVE_PLATFORM = [name for name, (family, _) in PLATFORMS.items() if family != "pyodide"]
 
 ALIASES: dict[str, str] = {
     "linux": "linux-x86_64",
@@ -49,6 +64,22 @@ ALIASES: dict[str, str] = {
     "windows-x86_64": "win-amd64",
     "win-x86_64": "win-amd64",
     "windows-arm64": "win-arm64",
+    "linux-armv7": "linux-armv7l",
+    "linux-arm": "linux-armv7l",
+    "linux-arm-v7": "linux-armv7l",
+    "linux-armhf": "linux-armv7l",
+    "manylinux-armv7l": "linux-armv7l",
+    "manylinux-ppc64le": "linux-ppc64le",
+    "manylinux-s390x": "linux-s390x",
+    "manylinux-riscv64": "linux-riscv64",
+    "musl-armv7": "musl-armv7l",
+    "musl-arm": "musl-armv7l",
+    "alpine-armv7": "musl-armv7l",
+    "alpine-armv7l": "musl-armv7l",
+    "musllinux-armv7l": "musl-armv7l",
+    "musllinux-ppc64le": "musl-ppc64le",
+    "musllinux-s390x": "musl-s390x",
+    "musllinux-riscv64": "musl-riscv64",
     "pyodide-wasm32": "pyodide",
     "emscripten": "pyodide",
     "wasm": "pyodide",
@@ -170,7 +201,8 @@ class Target:
         if family == "pyodide":
             return list(PYODIDE_PLATFORMS[(self.major, self.minor)])
         if family == "manylinux":
-            return manylinux_platforms(arch, self.glibc)
+            # pip also takes plain linux_<arch> wheels; PyPI only allows them for 32-bit ARM (Raspberry Pi).
+            return manylinux_platforms(arch, self.glibc) + [f"linux_{arch}"]
         if family == "musllinux":
             return musllinux_platforms(arch, self.musl)
         if family == "macos":
@@ -227,6 +259,8 @@ def build_targets(
                 continue
             if name.strip().lower() == "all":
                 plats.extend(NATIVE_PLATFORMS)
+            elif name.strip().lower() == "everything":
+                plats.extend(EVERY_NATIVE_PLATFORM)
             else:
                 plats.append(resolve_platform(name))
     plats = list(dict.fromkeys(plats)) or list(DEFAULT_PLATFORMS)

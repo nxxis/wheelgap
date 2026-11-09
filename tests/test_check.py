@@ -253,3 +253,15 @@ def test_marker_values_with_quotes_are_not_misread(monkeypatch):
     monkeypatch.setattr(Value, "serialize", lambda self: f'"{self.value}"')
     (lin,) = build_targets(["3.13"], ["linux-x86_64"])
     assert marker_holds("""sys_platform != 'x" and sys_platform == "win32'""", lin)
+
+
+def test_explain_plain_linux_wheel_on_musl_and_ordering():
+    from wheelgap.check import explain, rejection
+
+    (musl,) = build_targets(["3.13"], ["musl-armv7l"])
+    assert rejection("grpcio-1.85.1-cp313-cp313-linux_armv7l.whl", musl) == (
+        "linux_armv7l is a plain Linux (glibc) build; wheelgap only counts musllinux wheels for musl"
+    )
+    files = ["x-1-cp313-abi3-macosx_11_0_universal2.whl", "x-1-cp313-cp313-linux_armv7l.whl"]
+    # The same-arch Linux wheel comes first; a macOS universal2 wheel isn't "same arch" on Linux.
+    assert [f for f, _ in explain(files, musl)][0] == "x-1-cp313-cp313-linux_armv7l.whl"
