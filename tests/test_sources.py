@@ -64,13 +64,13 @@ def test_pdm_lock_legacy_metadata_files(tmp_path, fake_pypi):
         '[[package]]\nname = "oldpkg"\nversion = "1.0"\n\n'
         '[[package]]\nname = "newpkg"\nversion = "2.0"\n\n'
         '[[package]]\nname = "jinja2"\nversion = "3.1.2"\n\n'
-        '[metadata.files]\n'
+        "[metadata.files]\n"
         '"oldpkg 1.0" = [\n'
         '    {url = "https://files.pythonhosted.org/packages/oldpkg-1.0-py3-none-any.whl", hash = "sha256:00"},\n'
-        ']\n'
+        "]\n"
         '"Jinja2 3.1.2" = [\n'
         '    {url = "https://files.pythonhosted.org/packages/Jinja2-3.1.2-py3-none-any.whl", hash = "sha256:00"},\n'
-        ']\n'
+        "]\n"
     )
     path.write_text(lock, encoding="utf-8")
     (src,) = load_inputs([str(path)])
