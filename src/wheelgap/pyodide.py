@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,6 +69,15 @@ def load_pyodide_lock(spec: str) -> PyodideLock:
 
 
 def check_targets(lock: PyodideLock, targets: list[Target]) -> None:
+    """Error if no pyodide target can use the lock; warn about pyodide targets it doesn't cover."""
+    uncovered = sorted({t.python for t in targets if PLATFORMS[t.platform][0] == "pyodide" and not lock.applies_to(t)})
+    if uncovered and any(lock.applies_to(t) for t in targets):
+        py = f"{lock.python[0]}.{lock.python[1]}"
+        print(
+            f"wheelgap: note: {lock.source} is for Python {py}; pyodide results for Python {', '.join(uncovered)} "
+            "don't include packages that Pyodide bundles",
+            file=sys.stderr,
+        )
     if not any(lock.applies_to(t) for t in targets):
         have = ", ".join(sorted({t.python for t in targets if PLATFORMS[t.platform][0] == "pyodide"})) or "none"
         py = f"{lock.python[0]}.{lock.python[1]}"
@@ -78,10 +88,14 @@ def check_targets(lock: PyodideLock, targets: list[Target]) -> None:
 
 
 def apply_bundled(rows: list[Row], targets: list[Target], lock: PyodideLock) -> None:
-    """Mark gaps on matching pyodide targets as BUNDLED when Pyodide ships the package itself."""
+    """Mark gaps on matching pyodide targets as BUNDLED when Pyodide ships the package itself.
+
+    Only SOURCE and MISSING become BUNDLED. UNKNOWN means the lookup failed (a typo'd pin, a network
+    error), and that must stay a gap rather than pass because the name happens to be in the lock.
+    """
     for r in rows:
         if r.package.key not in lock.packages:
             continue
         for t in targets:
-            if lock.applies_to(t) and r.results[t] in (Status.SOURCE, Status.MISSING, Status.UNKNOWN):
+            if lock.applies_to(t) and r.results[t] in (Status.SOURCE, Status.MISSING):
                 r.results[t] = Status.BUNDLED

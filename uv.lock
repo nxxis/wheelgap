@@ -361,7 +361,7 @@ wheels = [
 
 [[package]]
 name = "wheelgap"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "packaging" },
@@ -375,7 +375,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "packaging", specifier = ">=24.2" }]
+requires-dist = [{ name = "packaging", specifier = ">=26.3" }]
 
 [package.metadata.requires-dev]
 dev = [

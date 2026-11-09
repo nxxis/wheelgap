@@ -21,5 +21,6 @@ runs:
       env:
         WHEELGAP_ARGS: ${{ inputs.args }}
         FORCE_COLOR: "1"
-      # WHEELGAP_ARGS is deliberately unquoted so it splits into separate arguments.
+      # WHEELGAP_ARGS is deliberately unquoted so it splits into separate arguments (and globs like
+      # requirements/*.txt expand). It arrives through an env var, so it can't inject commands.
       run: pipx run --spec "$GITHUB_ACTION_PATH" wheelgap $WHEELGAP_ARGS

@@ -106,7 +106,7 @@ If you think wheelgap got a package wrong, that output (or `--json --explain`) i
 
 **Exit codes:** `0` no gaps, `1` gaps found, `2` bad input. `--exit-zero` always exits `0`. `--fail-on missing` (or `fail-on = "missing"` in `[tool.wheelgap]`) accepts source builds and only exits `1` when a package can't be installed at all.
 
-Use `-q` / `--quiet` (or `quiet = true` in `[tool.wheelgap]`) to show only the gap summary and package names. Clean runs are silent, JSON output is unchanged, and quiet mode cannot be combined with `--explain`.
+Use `-q` / `--quiet` (or `quiet = true` in `[tool.wheelgap]`) to show only the gap summary and package names. Clean runs are silent, JSON output is unchanged, and quiet text output cannot be combined with `--explain` (`--json --explain` works).
 
 ### Targets
 
@@ -138,7 +138,7 @@ Docker platform names also work with `-t`, for example `-t linux/amd64,linux/arm
 
 ```yaml
 - uses: actions/checkout@v7
-- uses: wheelgap/wheelgap@v0.4.0
+- uses: wheelgap/wheelgap@v0.5.0
   with:
     args: uv.lock -p 3.13 -t linux-x86_64,linux-aarch64
 ```
@@ -150,7 +150,7 @@ The job fails when a dependency would build from source on a target you ship, fo
 ```yaml
 repos:
   - repo: https://github.com/wheelgap/wheelgap
-    rev: v0.4.0
+    rev: v0.5.0
     hooks:
       - id: wheelgap
 ```

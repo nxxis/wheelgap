@@ -350,3 +350,72 @@ def test_python_version_file_with_nothing_usable_uses_running_python(capsys, fix
     (project / ".python-version").write_text("system\n", encoding="utf-8")
     _, out, _ = run(capsys, str(project), "-t", "win-amd64", "--json")
     assert [t["python"] for t in json.loads(out)["targets"]] == [cli.running_python()]
+
+
+def test_gap_summary_counts_each_package_once():
+    from wheelgap.check import Row, Status
+    from wheelgap.cli import Style, gap_summary
+    from wheelgap.sources import Package
+    from wheelgap.targets import build_targets
+
+    lin, pyo = build_targets(["3.13"], ["linux", "pyodide"])
+    a = Row(Package("a", "1"), {lin: Status.SOURCE, pyo: Status.MISSING})
+    b = Row(Package("b", "1"), {lin: Status.UNKNOWN, pyo: Status.UNKNOWN})
+    c = Row(Package("c", "1"), {lin: Status.SOURCE, pyo: Status.WHEEL})
+    assert gap_summary([a, b, c], 3, Style(False)) == (
+        "3 of 3 packages have gaps: 1 will build from source, 1 can't install at all, 1 unknown."
+    )
+
+
+def test_quiet_from_pyproject_allows_json_explain(capsys, fixtures, tmp_path):
+    (tmp_path / "uv.lock").write_bytes((fixtures / "armgap" / "uv.lock").read_bytes())
+    (tmp_path / "pyproject.toml").write_text("[tool.wheelgap]\nquiet = true\n", encoding="utf-8")
+    code, out, err = run(capsys, str(tmp_path), "-p", "3.13", "-t", "musl-aarch64", "--json", "--explain")
+    assert code == 1 and not err  # used to exit 2 with a usage error
+    assert "rejected" in json.loads(out)["packages"][0]
+
+
+def test_no_quiet_overrides_pyproject(capsys, fixtures, tmp_path):
+    (tmp_path / "uv.lock").write_bytes((fixtures / "armgap" / "uv.lock").read_bytes())
+    (tmp_path / "pyproject.toml").write_text("[tool.wheelgap]\nquiet = true\n", encoding="utf-8")
+    code, out, _ = run(capsys, str(tmp_path), "-p", "3.13", "-t", "musl-aarch64", "--no-quiet", "--explain")
+    assert code == 1 and "via: app → armlib" in out and "is a glibc wheel" in out  # full --explain output
+
+
+def test_quiet_still_says_why_a_package_is_unknown(capsys, fake_pypi):
+    code, out, err = run(capsys, "does-not-exist==1.0", "-p", "3.13", "-t", "linux", "-q")
+    assert code == 1
+    assert "1 unknown" in out
+    assert "could not check does-not-exist: not on index" in err
+
+
+def test_python_version_file_with_a_bom(capsys, fixtures, tmp_path):
+    (tmp_path / "uv.lock").write_bytes((fixtures / "uvproj" / "uv.lock").read_bytes())
+    (tmp_path / ".python-version").write_text("﻿3.12\n", encoding="utf-8")  # as Notepad saves it
+    code, out, err = run(capsys, str(tmp_path), "-t", "win-amd64", "--json")
+    assert not err and [t["python"] for t in json.loads(out)["targets"]] == ["3.12"]
+
+
+def test_list_targets_uses_pyproject_limits(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[tool.wheelgap]\nglibc = "2.17"\n', encoding="utf-8")
+    code, out, _ = run(capsys, "--list-targets")
+    assert code == 0 and "glibc <= 2.17" in out
+
+
+def test_simple_index_url_exits_2(capsys, monkeypatch):
+    monkeypatch.setenv("WHEELGAP_INDEX_URL", "https://pypi.org/simple")
+    code, _, err = run(capsys, "requests==2.32.3", "-t", "linux")
+    assert code == 2 and "needs the JSON API" in err
+
+
+def test_output_is_utf8_on_a_cp1252_pipe(monkeypatch, capsys):
+    import io
+    import sys as _sys
+
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+    monkeypatch.setattr(_sys, "stdout", stream)
+    assert main(["--list-targets"]) == 0
+    stream.flush()
+    assert stream.encoding.lower().replace("-", "") == "utf8"

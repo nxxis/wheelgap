@@ -108,3 +108,53 @@ def test_lock_from_pyproject(capsys, fake_pypi, lock, tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text(f'[tool.wheelgap]\npyodide-lock = "{lock}"\n'.replace("\\", "/"))
     code, out, _ = run(capsys, "fastlib==2.0.0", "-p", "3.13", "-t", "pyodide")
     assert code == 0
+
+
+def test_failed_lookup_is_not_bundled(capsys, fake_pypi, lock):
+    # The name is in the lock, but this pinned version isn't on the index: that's a gap, not a pass.
+    code, out, _ = run(capsys, "fastlib==9.9", "-p", "3.13", "-t", "pyodide", "--pyodide-lock", lock, "--json")
+    fastlib = json.loads(out)["packages"][0]
+    assert fastlib["results"] == {"pyodide": "unknown"}
+    assert code == 1
+    assert (
+        run(capsys, "fastlib==9.9", "-p", "3.13", "-t", "pyodide", "--pyodide-lock", lock, "--fail-on", "missing")[0]
+        == 1
+    )
+
+
+def test_lock_from_pyproject_is_unused_without_a_matching_target(capsys, fake_pypi, lock, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(f'[tool.wheelgap]\npyodide-lock = "{lock}"\n'.replace("\\", "/"))
+    code, out, err = run(capsys, "purewheel", "-p", "3.13", "-t", "linux")
+    assert code == 0 and not err  # used to exit 2: "no pyodide target uses Python 3.13"
+
+
+def test_lock_from_pyproject_is_relative_to_pyproject(capsys, fake_pypi, fixtures, tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyodide-lock.json").write_bytes((fixtures / "pyodide-lock.json").read_bytes())
+    (project / "pyproject.toml").write_text('[tool.wheelgap]\npyodide-lock = "pyodide-lock.json"\n')
+    (project / "requirements.txt").write_text("fastlib==2.0.0\n")
+    code, out, err = run(capsys, str(project), "-p", "3.13", "-t", "pyodide", "--json")  # run from elsewhere
+    assert not err
+    assert json.loads(out)["packages"][0]["results"] == {"pyodide": "bundled"}
+    assert code == 0
+
+
+def test_lock_from_pyproject_is_not_even_read_without_a_pyodide_target(capsys, fake_pypi, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[tool.wheelgap]\npyodide-lock = "missing/pyodide-lock.json"\n')
+    code, _, err = run(capsys, "purewheel", "-p", "3.13", "-t", "linux")
+    assert code == 0 and not err  # a missing (or offline) lock doesn't matter to a linux-only run
+
+
+def test_lock_from_pyproject_for_another_python_is_an_error(capsys, fake_pypi, lock, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(f'[tool.wheelgap]\npyodide-lock = "{lock}"\n'.replace("\\", "/"))
+    code, _, err = run(capsys, "fastlib==2.0.0", "-p", "3.12", "-t", "pyodide")
+    assert code == 2 and "is for Python 3.13" in err  # rather than silently calling bundled packages missing
+
+
+def test_lock_covering_only_some_pyodide_targets_warns(capsys, fake_pypi, lock):
+    code, out, err = run(capsys, "fastlib==2.0.0", "-p", "3.12,3.13", "-t", "pyodide", "--pyodide-lock", lock)
+    assert "pyodide results for Python 3.12 don't include packages that Pyodide bundles" in err
